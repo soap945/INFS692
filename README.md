@@ -35,6 +35,6 @@ library(factoextra)<br>
 library(cluster)<br>
 library(mclust)<br>
 
-**There are alternative visualizations and approaches written in the code file**
-**Uncomment the cells to show the results**
-**Some printed are too long, so delete the invisible() function to check the whole results**
+**There are alternative visualizations and approaches written in the code file**<br>
+**Uncomment the cells to show the results**<br>
+**Some printed are too long, so delete the invisible() function to check the whole results**<br>
