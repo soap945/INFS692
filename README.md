@@ -1,6 +1,8 @@
 # INFS692
 Data Science with R
 
+**There is a problem initialize the h2o on chunck 13 on Dec 16th, which does not allow me to knit the pdf. So, Model1 report is based on the first version which did not convert the Institution to categorical variables. Model1 markdown file is updates which has the categorical value conversion set**
+
 ## The final submission is in the final project folder
 ### There are three models: 
 1. Model1 with stacking
