@@ -1,0 +1,144 @@
+---
+title: "model3"
+author: "Jay Zhu"
+date: "2022-12-08"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Load the required libraries
+```{r}
+library(dplyr)
+library(factoextra) 
+library(cluster)
+library(mclust)
+```
+
+# Set seed
+```{r}
+set.seed(123)
+```
+
+# Load the data
+```{r}
+data <- read.csv("radiomics_completedata.csv")
+```
+
+# Preprocess the data by excluding the binary and categorical data
+```{r}
+data <- select(data, -c(Institution, Failure.binary))
+head(data,5)
+```
+
+
+# Run the K-Means algorithm with k = 20 clusters
+```{r}
+clusters <- kmeans(data, 20, nstart=26)
+# between_ss/total_ss = 0.99 
+```
+
+# View the cluster assignments
+```{r}
+clusters$cluster
+```
+
+# View the cluster centers
+```{r}
+centers <- clusters$centers
+```
+
+# Visualize the clusters using a scatterplot
+```{r}
+options(ggrepel.max.overlaps = Inf)
+
+fviz_cluster(clusters, data = data,
+             ellipse.type = "euclid",
+             star.plot = TRUE, 
+             repel = TRUE,
+             ggtheme = theme_minimal(),
+)
+
+```
+
+# Hierarchical Model
+```{r}
+d <- dist(data)
+hcl <- hclust(d)
+```
+
+# The Dendrogram
+```{r}
+plot(hcl)
+```
+
+```{r}
+cutree(hcl, k=20)
+```
+
+# Model Based
+```{r}
+mcl <- Mclust(data[-1], G=5)
+summary(mcl)
+```
+
+```{r}
+# Detail of mcl: using VVI model in 5 groups
+mcl
+```
+
+```{r}
+# Classfication details
+table(data$Failure, mcl$classification)
+```
+
+```{r}
+# Use Rand Index
+adjustedRandIndex(data$Failure, mcl$classification)
+# Not optimal on clustering
+```
+
+# Mean - Distribution
+```{r}
+mean <- summary(mcl, parameter=TRUE)$mean
+head(mean,5)
+```
+
+```{r}
+# Again, apply new categories
+mcl_opt <- Mclust(data[-1], 1:20)
+mcl
+```
+
+```{r}
+# Determine why using VVI
+plot.Mclust(mcl_opt, what = "BIC", 
+     ylim = range(mcl_opt$BIC, na.rm = TRUE), 
+     legendArgs = list(x = "bottomleft", cex =0.7), ncol=5)
+```
+
+```{r}
+mcl2 <- Mclust(data, G=11, modelNames = "VVI")
+mcl2
+```
+
+# Plot mcl2
+```{r}
+# plot(mcl2, what="density")
+```
+
+
+# Visualization 
+```{r}
+cluster1 <- mcl$classification
+plot(data[,1:2], col=cluster1)
+```
+
+```{r}
+# Clustering of Failure and ZSP.W.AD
+cluster <- factor(predict(mcl)$classification)
+ggplot(data=data, aes(x=Failure, y=ZSP.W.ADC, color=cluster, shape=cluster)) +
+  geom_point(alpha=.8)
+```

@@ -1,0 +1,257 @@
+---
+title: "model1"
+author: "Jay Zhu"
+date: "2022-12-02"
+output:
+  word_document: default
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Model 1 - Stacking
+
+This is project for model 1 including Stacking. Here we need to import libraries and dataset and libraries firstly.
+
+```{r libraries and dataset, echo=TRUE, message=FALSE, warning=FALSE}
+#Import libraries and dataset
+library(tidymodels)
+library(plyr)
+library(caret)
+library(caretEnsemble)
+library(readr)
+library(ggplot2)
+library(tidyverse)
+library(rpart)       # for fitting decision trees
+library(ipred)       # for fitting bagged decision trees
+library(pROC)
+library(h2o)
+library(ggcorrplot)
+library(ROCR)
+library(recipes)
+
+remotes::install_github("kforthman/caretStack")
+```
+
+```{r}
+#Import the dataset
+radio_df <- read.csv("radiomics_completedata.csv")
+```
+
+### Check null value
+```{r}
+is.null(radio_df)
+sum(is.na(radio_df))
+# No null and na values
+```
+
+```{r}
+#If there is a missing value, simply omit them in this case
+#Remove invisible() to show the resutls of omit because the output is too long
+invisible(na.omit(radio_df))
+```
+
+
+### Check for normality, if not, normalize the data
+```{r}
+#Use Q-Q plot to see is the data is normally distributed
+#Since there are multi-variables in the dataset, so need to use mvnTest
+
+#Define the plot size
+par(mfrow=c(1,1))
+
+#create histogram for whole datasets to check the normality
+hist(radio_df$GLNU_align.H.PET, xlab = 'All columns', main = paste("Nomality of the dataset"))
+
+#create a Q-Q plot
+# mvn(radio_df_subset, mvnTest = c("dh"), multivariatePlot = c("persp"))
+```
+
+### Normalize the data
+```{r}
+#Scale all the columns except the categorical variables
+scaled_df <- scale(radio_df[3:431])
+head(as.data.frame(scaled_df),5)
+
+# check that we get mean of 0 and sd of 1 (Uncomment this if needed)
+# colMeans(scaled_df)  # faster version of apply(scaled_df, 2, mean)
+# apply(scaled_df, 2, sd)
+```
+
+```{r}
+#Check if the whole dataset is normalized
+hist(scaled_df, xlab = 'All columns', main = paste("Nomality of the dataset"))
+```
+
+### Get the correleation of the whole data except categorical variables
+```{r}
+#Calculate correlation using base R
+cor_radio_df <- round(cor(scaled_df),2)
+head(data.frame(cor_radio_df),5)
+
+#Calculate correlation using Hmisc package
+#pearson_cor_radio_df <- rcorr(as.matrix(radio_df_subset), type=c("pearson"))
+#pearson_cor_radio_df
+```
+
+## Split the data into training
+```{r}
+# #Split the dataset - Aborted
+# index_1 <- sample(1:nrow(radio_df), round(nrow(radio_df) * 0.8))
+# radio_train <- radio_df[index_1, ]
+# radio_test  <- radio_df[-index_1, ]
+
+# Conver the matrix to dataframe
+scaled_df <- as.data.frame(scaled_df)
+
+# Combine two dataframes
+scaled_df2 <- cbind(scaled_df, radio_df['Failure.binary'])
+scaled_df3 <- cbind(scaled_df2, radio_df['Institution'])
+scaled_df3$Institution <- revalue(scaled_df3$Institution, c(A = "1", B = "2", C="3", D="4"))
+
+# Set seeds for reproducing
+seeds <- set.seed(100)
+  
+# Split the dataset
+data_split <- initial_split(scaled_df3, prop = 0.8, strata="Failure.binary", seed = seeds)
+radio_train <- training(data_split)
+radio_test <- testing(data_split)
+
+# Consistent categorical levels
+# step_dummy(all_nominal(), one_hot = FALSE) 
+blueprint <- recipe(Failure.binary ~ ., data = radio_train) %>%
+  step_other(all_nominal(), threshold = 0.005)
+```
+
+## Create the Stacking model
+```{r}
+# initialize the h2o library
+h2o.init()
+```
+
+
+```{r}
+train_df <- prep(blueprint, training = radio_train, retain=TRUE) %>% juice() %>%
+  as.h2o()
+test_df <- prep(blueprint, training = radio_train, retain=TRUE) %>% 
+  bake(new_data = radio_test) %>%
+  as.h2o()
+
+# Identify predictors and response
+y <- "Failure.binary"     #response
+x <- setdiff(names(train_df), y)     #predictors
+
+# Cross_validation folds number
+nfolds <- 10
+
+# Generate 3 models (GBM + RF + KNN)
+# GBM
+gbm <- h2o.gbm(x = x,
+                  y = y,
+                  training_frame = train_df,
+                  nfolds = nfolds,
+                  keep_cross_validation_predictions = TRUE,
+                  seed = 100)
+
+# RF
+rf <- h2o.randomForest(x = x,
+                          y = y,
+                          training_frame = train_df,
+                          nfolds = nfolds,
+                          keep_cross_validation_predictions = TRUE,
+                          seed = 100)
+
+# XGBoost
+xgb <- h2o.xgboost(x = x, 
+                      y = y, 
+                      training_frame = train_df,
+                      nfolds = nfolds,
+                      keep_cross_validation_predictions = TRUE,
+                      booster = "dart",
+                      normalize_type = "tree",
+                      seed = 100)
+
+# Stack each model above
+stacking <- h2o.stackedEnsemble(x = x,
+                                y = y,
+                                metalearner_algorithm="drf",
+                                training_frame = train_df,
+                                base_models = list(gbm, rf, xgb))
+stacking
+```
+
+### Print the AUC values for training
+```{r}
+# Compute the predicted probablities for traning set and test set
+train_prob <- predict(stacking, train_df, type="prob")
+train_prob_df <- as.data.frame(train_prob)
+# Check the probablity of test data ("a" is simply for print results)
+prob_train <- unlist(train_prob_df)
+prob_train
+
+# Convert to dataframe
+train_df <- as.data.frame(train_df)
+
+# ROC plot for training data
+train_roc_res <- roc(train_df$Failure.binary ~ prob_train, plot=TRUE, legacy.axes=FALSE,
+    percent=TRUE, col="black", lwd=2, print.auc=TRUE)
+
+# # Uncomment this for just result
+# roc_res
+
+# AUC value showing on the plot
+plot(train_roc_res, print.auc=TRUE, auc.polygon=TRUE, grid=c(0.1, 0.2), max.auc.polygon=TRUE,auc.polygon.col="skyblue", print.thres=TRUE)
+```
+
+### Plot the graph for testing
+```{r}
+# Compute the predicted probablities for traning set and test set
+test_prob <- predict(stacking, test_df, type="prob")
+test_prob_df <- as.data.frame(test_prob)
+# Check the probablity of test data ("a" is simply for print results)
+prob_test <- unlist(test_prob_df)
+prob_test
+
+# Convert to dataframe
+test_df <- as.data.frame(test_df)
+
+# ROC plot for testing data
+test_roc_res <- roc(test_df$Failure.binary ~ prob_test, plot=TRUE, legacy.axes=FALSE,
+    percent=TRUE, col="black", lwd=2, print.auc=TRUE)
+
+# AUC value showing on the plot
+plot(test_roc_res, print.auc=TRUE, auc.polygon=TRUE, grid=c(0.1, 0.2), max.auc.polygon=TRUE,auc.polygon.col="skyblue", print.thres=TRUE)
+```
+
+## For model performence (Uncomment this to run)
+```{r}
+# # Predication
+# pred <- predication(train_df)
+# 
+# # Compare to base learner performance on the test set
+# perf_gbm_test <- performance(train_prob, "sens", "spec")
+# perf_rf_test <- performance(rf, newdata = train_df)
+# perf_xgb_test <- performance(xgb, newdata = train_df)
+# 
+# baselearner_best_auc_test <- max(h2o.auc(perf_gbm_test), h2o.auc(perf_rf_test), h2o.auc(perf_xgb_test))
+# 
+# ensemble_auc_test <- h2o.auc(perf)
+# 
+# print(sprintf("Best Base-learner Test AUC:  %s", baselearner_best_auc_test))
+# print(sprintf("Ensemble Test AUC:  %s", ensemble_auc_test))
+```
+
+## Feature importance visualization
+```{r}
+# General way to do it
+vip::vip(gbm, num_features = 20)
+vip::vip(rf, num_features = 20)
+vip::vip(xgb, num_features = 20)
+
+#Another way to do it
+h2o.varimp_plot(xgb)
+```
